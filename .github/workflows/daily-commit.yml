@@ -15,30 +15,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Update README timestamp
         run: |
-          LINE="Last update: $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+          # Use a more robust date format and ensure the line exists
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S')
+          LINE="Last update: $TIMESTAMP UTC"
 
           if [ -f README.md ]; then
             if grep -q '^Last update:' README.md; then
-              # Replace existing Last update line
               sed -i "s/^Last update:.*/$LINE/" README.md
             else
-              # Append new Last update line
-              echo "" >> README.md
-              echo "$LINE" >> README.md
+              echo -e "\n$LINE" >> README.md
             fi
           else
-            echo "$LINE" > README.md
+            echo "# Daily Contributions Automation" > README.md
+            echo -e "\n$LINE" >> README.md
           fi
 
       - name: Commit and push changes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "Brutalxnor"
-          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          # Use the verified email for contribution attribution
+          git config user.name "moshaosama"
+          git config user.email "mohamedOSFekry@gmail.com"
 
           if git diff --quiet; then
             echo "No changes to commit"
@@ -46,6 +47,6 @@ jobs:
           fi
 
           git add README.md
-          git commit -m "chore: daily contribution update"
+          git commit -m "chore: automated daily contribution update ($TIMESTAMP)"
           git push
 
