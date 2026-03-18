@@ -18,12 +18,13 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Update README timestamp
+      - name: Update README and Commit
         run: |
-          # Use a more robust date format and ensure the line exists
+          # Define timestamp
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S')
           LINE="Last update: $TIMESTAMP UTC"
 
+          # Update README
           if [ -f README.md ]; then
             if grep -q '^Last update:' README.md; then
               sed -i "s/^Last update:.*/$LINE/" README.md
@@ -35,11 +36,9 @@ jobs:
             echo -e "\n$LINE" >> README.md
           fi
 
-      - name: Commit and push changes
-        run: |
-          # Use the verified email for contribution attribution
-          git config user.name "moshaosama"
-          git config user.email "mohamedOSFekry@gmail.com"
+          # Git config and commit
+          git config user.name "Brutalxnor"
+          git config user.email "ahmadhema2015@gmail.com"
 
           if git diff --quiet; then
             echo "No changes to commit"
