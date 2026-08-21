@@ -1,16 +1,45 @@
 name: Daily contribution update
 
+# GitHub Actions cron is UTC-only and has no DST awareness, so hitting
+# 00:01 Cairo year-round takes two entries plus the guard in the job:
+#   21:01 UTC -> 00:01 Cairo while Egypt is on EEST (UTC+3, ~Apr-Oct)
+#   22:01 UTC -> 00:01 Cairo while Egypt is on EET  (UTC+2, ~Oct-Apr)
+# The out-of-season one lands at 23:01 Cairo the previous day, gets skipped by
+# the guard, and the correct one fires an hour later. Exactly one commit per
+# Cairo day either way.
+#
+# The rest are retries. Scheduled runs are best-effort: GitHub delays them
+# under load and drops them outright, and a billing block or runner hiccup
+# kills them too. The guard makes every run idempotent, so retries cost
+# nothing on a normal day and rescue the day when the midnight run dies.
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Commit even if today already has one"
+        type: boolean
+        default: false
   schedule:
-    # Every day at 07:00 Cairo time (~05:00 UTC)
-    - cron: "0 5 * * *"
+    - cron: "1 21 * * *"   # 00:01 Cairo (summer, EEST)
+    - cron: "1 22 * * *"   # 00:01 Cairo (winter, EET)
+    - cron: "7 3 * * *"    # retry
+    - cron: "13 9 * * *"   # retry
+    - cron: "17 15 * * *"  # retry
+    - cron: "23 19 * * *"  # last chance before the Cairo day ends
+
+# Never let two runs race each other into a push conflict.
+concurrency:
+  group: daily-commit
+  cancel-in-progress: false
 
 jobs:
   update-readme:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
+    env:
+      TZ: Africa/Cairo
 
     steps:
       - name: Checkout repository
@@ -18,34 +47,62 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Update README and Commit
+      - name: Skip if today already has a commit
+        id: guard
         run: |
-          # Define timestamp
-          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S')
-          LINE="Last update: $TIMESTAMP UTC"
-
-          # Update README
-          if [ -f README.md ]; then
-            if grep -q '^Last update:' README.md; then
-              sed -i "s/^Last update:.*/$LINE/" README.md
-            else
-              echo -e "\n$LINE" >> README.md
-            fi
+          set -euo pipefail
+          TODAY=$(date '+%Y-%m-%d')
+          LAST=$(git log -1 --format=%ad --date=format-local:%Y-%m-%d)
+          echo "Cairo today: $TODAY | last commit (Cairo): $LAST"
+          if [ "$LAST" = "$TODAY" ] && [ "$FORCE" != "true" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Already committed for $TODAY - nothing to do."
           else
-            echo "# Daily Contributions Automation" > README.md
-            echo -e "\n$LINE" >> README.md
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          FORCE: ${{ inputs.force }}
+
+      - name: Update README and commit
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+
+          STAMP=$(date '+%Y-%m-%d %H:%M:%S %Z (UTC%:z)')
+          LINE="Last update: $STAMP"
+
+          # '|' delimiter: the stamp contains no '|' or '&', so this is safe.
+          if [ -f README.md ] && grep -q '^Last update:' README.md; then
+            sed -i "s|^Last update:.*|$LINE|" README.md
+          else
+            [ -f README.md ] || printf '# Daily Contributions Automation\n' > README.md
+            printf '\n%s\n' "$LINE" >> README.md
           fi
 
-          # Git config and commit
           git config user.name "Brutalxnor"
           git config user.email "ahmadhema2015@gmail.com"
 
-          if git diff --quiet; then
-            echo "No changes to commit"
-            exit 0
+          if git diff --quiet -- README.md; then
+            echo "README unchanged; committing empty to keep the day green."
+            git commit -q --allow-empty -m "chore: automated daily contribution update ($STAMP)"
+          else
+            git add README.md
+            git commit -q -m "chore: automated daily contribution update ($STAMP)"
           fi
 
-          git add README.md
-          git commit -m "chore: automated daily contribution update ($TIMESTAMP)"
-          git push
+          # Push with rebase-retry in case something else landed meanwhile.
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push failed (attempt $attempt); rebasing onto origin/main."
+            git pull --rebase --autostash origin main
+          done
+          echo "::error::Could not push after 3 attempts."
+          exit 1
 
+      - name: Report failure loudly
+        if: failure()
+        run: |
+          echo "::error::Daily contribution update FAILED. If the job never started, check Billing & plans - a failed payment or spending limit blocks all Actions on private repos."
